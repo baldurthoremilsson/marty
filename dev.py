@@ -95,19 +95,12 @@ class Populator(object):
         cols = ', '.join('{} {}'.format(col[0], col[1]) for col in columns)
         cur = self.devcon.cursor()
         cur.execute(query.format(table_name, cols))
-        cur.execute("""
-        SELECT oid
-        FROM pg_class
-        WHERE relnamespace = %s AND relname = %s
-        """, (schema_oid, name))
-        table_oid = cur.fetchone()[0]
-        print table_oid
         for column in columns:
             cur.execute("""
             UPDATE pg_attribute
             SET atttypmod = %s
-            WHERE attrelid = %s AND attname = %s
-            """, (column[2], table_oid, column[0]))
+            WHERE attrelid = %s::regclass::oid AND attname = %s
+            """, (column[2], table_name, column[0]))
         cur.close()
 
 
