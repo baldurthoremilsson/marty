@@ -82,6 +82,7 @@ class Populator(object):
         SELECT name, type, length
         FROM marty_columns
         WHERE table_oid = %s AND start <= %s AND (stop IS NULL OR stop > %s)
+        ORDER BY number ASC
         """, (table_oid, self.update_id, self.update_id))
         columns = cur.fetchall()
         cur.close()
