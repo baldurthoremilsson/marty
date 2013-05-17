@@ -12,12 +12,13 @@ class Schema(object):
 
 class Table(object):
 
-    def __init__(self, con, schema, oid, name):
-        self.con = con
+    def __init__(self, schema, oid, name, con=None, internal_name=None):
         self.schema = schema
         self.oid = oid
         self.name = name
         self.columns = []
+        self.con = con
+        self._internal_name = internal_name
         self.update = None
 
     def __repr__(self):
@@ -29,7 +30,9 @@ class Table(object):
 
     @property
     def internal_name(self):
-        return 'data_{}_{}_{}'.format(self.schema.name, self.name, self.update)
+        if not self._internal_name:
+            self._internal_name = 'data_{}_{}_{}'.format(self.schema.name, self.name, self.update)
+        return self._internal_name
 
     @property
     def internal_columns(self):
@@ -38,8 +41,8 @@ class Table(object):
         yield StartColumn()
         yield StopColumn()
 
-    def add_column(self, name, number, type, length):
-        self.columns.append(Column(self, name, number, type, length))
+    def add_column(self, name, number, type, length, internal_name=None):
+        self.columns.append(Column(self, name, number, type, length, internal_name=internal_name))
 
     def data(self):
         cur = self.con.cursor()
@@ -51,19 +54,22 @@ class Table(object):
 
 class Column(object):
 
-    def __init__(self, table, name, number, type, length):
+    def __init__(self, table, name, number, type, length, internal_name=None):
         self.table = table
         self.name = name
         self.number = number
         self.type = type
         self.length = length
+        self._internal_name = internal_name
 
     def __repr__(self):
         return u'<Column {} {}({})>'.format(self.name, self.type, self.length)
 
     @property
     def internal_name(self):
-        return 'data_{}_{}'.format(self.name, self.table.update)
+        if not self._internal_name:
+            self._internal_name = 'data_{}_{}'.format(self.name, self.table.update)
+        return self._internal_name
 
 
 class StartColumn(object):

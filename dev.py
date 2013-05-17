@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import psycopg2
+from utils import HistoryInspector, DevPopulator, get_logger
 
 DEV = {
     'host': 'localhost',
@@ -18,92 +19,6 @@ HISTORY = {
 }
 
 
-class Populator(object):
-
-    def __init__(self, devcon, histcon):
-        self.devcon = devcon
-        self.histcon = histcon
-        self.update_id = None
-
-    def populate(self):
-        self._get_update_id()
-        self._populate_schemas()
-        self.devcon.commit()
-
-    def _get_update_id(self):
-        cur = self.histcon.cursor()
-        cur.execute("""
-        SELECT id
-        FROM marty_updates
-        ORDER BY time DESC
-        LIMIT 1
-        """)
-        self.update_id = cur.fetchone()[0]
-        cur.close()
-
-    def _populate_schemas(self):
-        cur = self.histcon.cursor()
-        cur.execute("""
-        SELECT oid, name
-        FROM marty_schemas
-        WHERE start <= %s AND (stop IS NULL OR stop > %s)
-        """, (self.update_id, self.update_id))
-        for oid, name in cur:
-            schema_oid = self._create_schema(oid, name)
-            self._populate_tables(schema_oid, oid, name)
-        cur.close()
-
-    def _create_schema(self, oid, name):
-        cur = self.devcon.cursor()
-        cur.execute('CREATE SCHEMA IF NOT EXISTS {}'.format(name))
-        cur.execute("""
-        SELECT oid
-        FROM pg_namespace
-        WHERE nspname = %s
-        """, (name,))
-        schema_oid = cur.fetchone()[0]
-        cur.close()
-        return schema_oid
-
-    def _populate_tables(self, local_schema_oid, schema_oid, schema_name):
-        cur = self.histcon.cursor()
-        cur.execute("""
-        SELECT oid, name
-        FROM marty_tables
-        WHERE schema = %s AND start <= %s AND (stop IS NULL OR stop > %s)
-        """, (schema_oid, self.update_id, self.update_id))
-        for oid, name in cur:
-            self._create_table(local_schema_oid, schema_name, oid, name)
-        cur.close()
-
-    def _get_columns(self, table_oid):
-        cur = self.histcon.cursor()
-        cur.execute("""
-        SELECT name, type, length
-        FROM marty_columns
-        WHERE table_oid = %s AND start <= %s AND (stop IS NULL OR stop > %s)
-        ORDER BY number ASC
-        """, (table_oid, self.update_id, self.update_id))
-        columns = cur.fetchall()
-        cur.close()
-        return columns
-
-    def _create_table(self, schema_oid, schema_name, oid, name):
-        table_name = '{}.{}'.format(schema_name, name)
-        columns = self._get_columns(oid)
-        query = 'CREATE TABLE {}({})'
-        cols = ', '.join('{} {}'.format(col[0], col[1]) for col in columns)
-        cur = self.devcon.cursor()
-        cur.execute(query.format(table_name, cols))
-        for column in columns:
-            cur.execute("""
-            UPDATE pg_attribute
-            SET atttypmod = %s
-            WHERE attrelid = %s::regclass::oid AND attname = %s
-            """, (column[2], table_name, column[0]))
-        cur.close()
-
-
 def connect():
     devcon = psycopg2.connect(**DEV)
     histcon = psycopg2.connect(**HISTORY)
@@ -112,5 +27,16 @@ def connect():
 
 if __name__ == "__main__":
     devcon, histcon = connect()
-    populator = Populator(devcon, histcon)
-    populator.populate()
+
+    inspector_logger = get_logger('inspector')
+    populator_logger = get_logger('populator')
+
+    inspector = HistoryInspector(histcon, logger=inspector_logger)
+    populator = DevPopulator(devcon, inspector.update, HISTORY, logger=populator_logger)
+    populator.initialize()
+    for schema in inspector.schemas():
+        populator.create_schema(schema)
+        for table in inspector.tables(schema):
+            inspector.columns(table)
+            populator.create_table(table)
+    devcon.commit()
