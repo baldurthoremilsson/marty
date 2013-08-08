@@ -7,7 +7,6 @@ class HistoryPopulator(object):
 
     def __init__(self, con, logger=None):
         self.con = con
-        self._lock_update = False
         self._update_id = None
         if logger:
             self.logger = logger
@@ -65,17 +64,7 @@ class HistoryPopulator(object):
         cur.close()
         self.con.commit()
 
-    def lock_update(self):
-        self._lock_update = True
-
-    def unlock_update(self):
-        self._lock_update = False
-
-    @property
-    def _update(self):
-        if self._update_id != None and self._lock_update:
-            return self._update_id
-
+    def update(self):
         cur = self.con.cursor()
         cur.execute("""
         INSERT INTO marty_updates DEFAULT VALUES RETURNING id
@@ -84,7 +73,6 @@ class HistoryPopulator(object):
         cur.close()
         self.con.commit()
         self.logger.debug('new update id {}'.format(self._update_id))
-        return self._update_id
 
     def add_schema(self, schema):
         self.logger.info('adding schema {}'.format(schema.name))
@@ -92,7 +80,7 @@ class HistoryPopulator(object):
         cur = self.con.cursor()
         cur.execute("""
         INSERT INTO marty_schemas(oid, name, start) VALUES(%s, %s, %s)
-        """, (schema.oid, schema.name, self._update))
+        """, (schema.oid, schema.name, self._update_id))
         cur.close()
         self.con.commit()
 
@@ -101,13 +89,13 @@ class HistoryPopulator(object):
     def add_table(self, table):
         self.logger.info('adding table {}'.format(table.long_name))
 
-        update = self._update
+        update = self._update_id
         table.update = update
         cur = self.con.cursor()
         cur.execute("""
         INSERT INTO marty_tables(oid, name, schema, internal_name, start)
         VALUES(%s, %s, %s, %s, %s)
-        """, (table.oid, table.name, table.schema.oid, table.internal_name, self._update))
+        """, (table.oid, table.name, table.schema.oid, table.internal_name, self._update_id))
         cur.close()
         self.con.commit()
 
@@ -123,7 +111,7 @@ class HistoryPopulator(object):
         cur.execute("""
         INSERT INTO marty_columns(table_oid, name, number, type, length, internal_name, start)
         VALUES(%s, %s, %s, %s, %s, %s, %s)
-        """, (column.table.oid, column.name, column.number, column.type, column.length, column.internal_name, self._update))
+        """, (column.table.oid, column.name, column.number, column.type, column.length, column.internal_name, self._update_id))
         cur.close()
         self.con.commit()
 
@@ -158,11 +146,35 @@ class HistoryPopulator(object):
         cur = self.con.cursor()
         for line in table.data():
             values = list(line)
-            values.extend([self._update, None])
+            values.extend([self._update_id, None])
             cur.execute(query, values)
 
             self.logger.debug(cur.query)
 
+        cur.close()
+        self.con.commit()
+
+    def insert(self, table, block, offset, row):
+        self.logger.info('inserting to table {}'.format(table.internal_name))
+        table_name = table.internal_name
+        column_names = ', '.join(column.internal_name for column in table.internal_columns)
+        value_list = ', '.join('%s' for column in table.internal_columns)
+        query = 'INSERT INTO {}({}) VALUES({})'.format(table_name, column_names, value_list)
+
+        values = ['({},{})'.format(block, offset)] + list(row) + [self._update_id, None]
+        cur = self.con.cursor()
+        cur.execute(query, values)
+        self.logger.debug(cur.query)
+        cur.close()
+        self.con.commit()
+
+    def delete(self, table, block, offset):
+        self.logger.info('deleting from table {}'.format(table.internal_name))
+        query = 'UPDATE {} SET stop = %s WHERE data_ctid = %s'.format(table.internal_name)
+        values = [self._update_id, '({},{})'.format(block, offset)]
+        cur = self.con.cursor()
+        cur.execute(query, values)
+        self.logger.debug(cur.query)
         cur.close()
         self.con.commit()
 

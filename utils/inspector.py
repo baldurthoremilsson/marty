@@ -6,11 +6,20 @@ class SlaveInspector(object):
 
     def __init__(self, con, logger=None):
         self.con = con
+        self.db_oid = self._get_db_oid()
+        self.tabledict = {}
         if logger:
             self.logger = logger
         else:
             self.logger = logging.getLogger()
             self.logger.addHandler(logging.NullHandler())
+
+    def _get_db_oid(self):
+        cur = self.con.cursor()
+        cur.execute('SELECT oid FROM pg_database WHERE datname = current_database()')
+        row = cur.fetchone()
+        cur.close()
+        return row[0]
 
     def schemas(self):
         cur = self.con.cursor()
@@ -37,13 +46,15 @@ class SlaveInspector(object):
         """
         cur = self.con.cursor()
         cur.execute("""
-        SELECT oid, relname
+        SELECT oid, relname, relfilenode
         FROM pg_class
         WHERE relnamespace = %s AND relkind = 'r'
         """, (schema.oid,))
-        for oid, name in cur:
-            self.logger.info('table {}, {}'.format(oid, name))
-            yield Table(schema, oid, name, con=self.con)
+        for oid, name, filenode in cur:
+            self.logger.info('table {}, {} ({})'.format(oid, name, filenode))
+            table = Table(schema, oid, name, filenode, con=self.con)
+            self.tabledict[filenode] = table
+            yield table
         cur.close()
 
     def columns(self, table):
@@ -71,6 +82,19 @@ class SlaveInspector(object):
             self.logger.info('column {} {}({})'.format(name, type, length))
             table.add_column(name, number, type, length)
         cur.close()
+
+    def resume(self):
+        cur = self.con.cursor()
+        cur.execute('SELECT pg_xlog_replay_resume()')
+        cur.close()
+
+    def get(self, table, block, offset):
+        cur = self.con.cursor()
+        print "SELECT * FROM {} WHERE ctid = '({},{})'".format(table.long_name, block, offset)
+        cur.execute("SELECT * FROM {} WHERE ctid = '({},{})'".format(table.long_name, block, offset))
+        row = cur.fetchone()
+        cur.close()
+        return row
 
 
 class HistoryInspector(object):

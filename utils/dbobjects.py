@@ -12,10 +12,11 @@ class Schema(object):
 
 class Table(object):
 
-    def __init__(self, schema, oid, name, con=None, internal_name=None):
+    def __init__(self, schema, oid, name, filenode, con=None, internal_name=None):
         self.schema = schema
         self.oid = oid
         self.name = name
+        self.filenode = filenode
         self.columns = []
         self.con = con
         self._internal_name = internal_name
@@ -36,6 +37,7 @@ class Table(object):
 
     @property
     def internal_columns(self):
+        yield CTIDColumn()
         for column in self.columns:
             yield column
         yield StartColumn()
@@ -46,7 +48,7 @@ class Table(object):
 
     def data(self):
         cur = self.con.cursor()
-        cur.execute('SELECT * FROM {}'.format(self.long_name))
+        cur.execute('SELECT ctid, * FROM {}'.format(self.long_name))
         for row in cur:
             yield row
         cur.close()
@@ -70,6 +72,12 @@ class Column(object):
         if not self._internal_name:
             self._internal_name = 'data_{}_{}'.format(self.name, self.table.update)
         return self._internal_name
+
+
+class CTIDColumn(object):
+    internal_name = 'data_ctid'
+    type = 'tid'
+    length = -1
 
 
 class StartColumn(object):
