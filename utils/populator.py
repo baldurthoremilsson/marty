@@ -255,7 +255,7 @@ class DevPopulator(object):
         # Create table for local data
         table.update = self.update
         query = 'CREATE TABLE marty.{table}({cols})'
-        cols = ','.join('\n  {name} {type}'.format(name=column.name, type=column.type) for column in table.columns)
+        cols = ','.join('\n  "{name}" {type}'.format(name=column.name, type=column.type) for column in table.columns)
         cur = self.con.cursor()
         cur.execute(query.format(table=table.internal_name, cols=cols))
         for column in table.columns:
@@ -267,8 +267,8 @@ class DevPopulator(object):
 
 
         # Create view that combines local and remote data
-        my_cols = ', '.join([col.name for col in table.columns])
-        temp_columns = ['{name} {type}'.format(name=col.name, type=col.type) for col in table.columns]
+        my_cols = ', '.join(['"{}"'.format(col.name) for col in table.columns])
+        temp_columns = ['"{name}" {type}'.format(name=col.name, type=col.type) for col in table.columns]
         temp_table_def = 't1({columns})'.format(columns=', '.join(temp_columns))
 
         view_query = """
@@ -282,7 +282,7 @@ class DevPopulator(object):
         INSERT INTO marty.bookkeeping(view_name, local_table, coldef, remote_select_stmt, temp_table_def)
         VALUES(%(view_name)s, %(local_table)s, %(coldef)s, %(remote_select_stmt)s, %(temp_table_def)s);
         """
-        local_cols = ', '.join([col.name for col in table.columns])
+        local_cols = ', '.join(['"{}"'.format(col.name) for col in table.columns])
         internal_cols = ', '.join([col.internal_name for col in table.columns])
         remote_select_stmt = 'SELECT {cols} FROM {table} WHERE start <= {update} and (stop IS NULL or stop > {update})'
         bookkeeping_values = {
@@ -299,8 +299,8 @@ class DevPopulator(object):
             'local_table': 'marty.' + table.internal_name,
             'local_columns': my_cols,
             'new_values_insert': ', '.join(['NEW.' + col.name for col in table.columns]),
-            'new_values_update': ', '.join(['{name} = NEW.{name}'.format(name=col.name) for col in table.columns]),
-            'old_values': ' AND '.join(['{name} = OLD.{name}'.format(name=col.name) for col in table.columns]),
+            'new_values_update': ', '.join(['"{name}" = NEW.{name}'.format(name=col.name) for col in table.columns]),
+            'old_values': ' AND '.join(['"{name}" = OLD.{name}'.format(name=col.name) for col in table.columns]),
             'view_name': table.long_name,
         }
 
