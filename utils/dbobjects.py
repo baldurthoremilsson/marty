@@ -12,11 +12,10 @@ class Schema(object):
 
 class Table(object):
 
-    def __init__(self, schema, oid, name, filenode, con=None, internal_name=None):
+    def __init__(self, schema, oid, name, con=None, internal_name=None):
         self.schema = schema
         self.oid = oid
         self.name = name
-        self.filenode = filenode
         self.columns = []
         self.con = con
         self._internal_name = internal_name

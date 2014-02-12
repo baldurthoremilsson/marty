@@ -52,7 +52,7 @@ class SlaveInspector(object):
         """, (schema.oid,))
         for oid, name, filenode in cur:
             self.logger.info('table {}, {} ({})'.format(oid, name, filenode))
-            table = Table(schema, oid, name, filenode, con=self.con)
+            table = Table(schema, oid, name, con=self.con)
             self.tabledict[filenode] = table
             yield table
         cur.close()
@@ -140,7 +140,7 @@ class HistoryInspector(object):
           AND start <= %(update_id)s AND (stop IS NULL OR stop > %(update_id)s)
         """, {'schema_id': schema.oid, 'update_id': self.update})
         for oid, name, internal_name in cur:
-            yield Table(schema, oid, name, internal_name)
+            yield Table(schema, oid, name, internal_name=internal_name)
         cur.close()
 
     def columns(self, table):
