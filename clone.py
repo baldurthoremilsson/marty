@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 
 import psycopg2
-from utils import HistoryInspector, DevPopulator, get_logger
+from utils import HistoryInspector, ClonePopulator, get_logger
 
-DEV = {
+CLONE = {
     'host': 'localhost',
     'port': 5437,
     'user': 'baldur',
@@ -20,23 +20,23 @@ HISTORY = {
 
 
 def connect():
-    devcon = psycopg2.connect(**DEV)
+    clonecon = psycopg2.connect(**CLONE)
     histcon = psycopg2.connect(**HISTORY)
-    return devcon, histcon
+    return clonecon, histcon
 
 
 if __name__ == "__main__":
-    devcon, histcon = connect()
+    clonecon, histcon = connect()
 
     inspector_logger = get_logger('inspector')
     populator_logger = get_logger('populator')
 
     inspector = HistoryInspector(histcon, logger=inspector_logger)
-    populator = DevPopulator(devcon, inspector.update, HISTORY, logger=populator_logger)
+    populator = ClonePopulator(clonecon, inspector.update, HISTORY, logger=populator_logger)
     populator.initialize()
     for schema in inspector.schemas():
         populator.create_schema(schema)
         for table in inspector.tables(schema):
             inspector.columns(table)
             populator.create_table(table)
-    devcon.commit()
+    clonecon.commit()

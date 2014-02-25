@@ -179,7 +179,7 @@ class HistoryPopulator(object):
         self.con.commit()
 
 
-class DevPopulator(object):
+class ClonePopulator(object):
 
     def __init__(self, con, update, history_coninfo, logger=None):
         self.con = con
