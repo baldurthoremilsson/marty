@@ -4,11 +4,11 @@ import sys
 import logging
 
 from inspector import SlaveInspector, HistoryInspector
-from populator import HistoryPopulator, DevPopulator
+from populator import HistoryPopulator, ClonePopulator
 
 
 __all__ = ('SlaveInspector', 'HistoryInspector', 'HistoryPopulator',
-        'DevPopulator', 'get_logger')
+        'ClonePopulator', 'get_logger')
 
 
 def get_logger(name):
