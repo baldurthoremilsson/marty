@@ -32,10 +32,11 @@ class RegExer(object):
             'insert': re.compile(r'Heap - insert(?:\(init\))?: {}'.format(rel_tid)),
             'update': re.compile(r'Heap - (?:hot_)?update: {} xmax \d+ ; new tid (?P<new_block>\d+)/(?P<new_offset>\d+) xmax \d+'.format(rel_tid)),
             'delete': re.compile(r'Heap - delete: {}'.format(rel_tid)),
+            'lastup': re.compile(r'LOG:  database system was interrupted; last known up at (?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})'),
             'connect': re.compile(r'LOG:  database system is ready to accept read only connections'),
             'paused': re.compile(r'LOG:  recovery has paused'),
             'redo': re.compile(r'LOG:  REDO @ [0-9A-F]+/[0-9A-F]+; LSN [0-9A-F]+/[0-9A-F]+: prev [0-9A-F]+/[0-9A-F]+; xid [0-9]+; len [0-9]+: (.*)'),
-            'commit': re.compile(r'Transaction - commit'),
+            'commit': re.compile(r'Transaction - commit: (?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)'),
         }
 
     def match(self, regex, pattern):
@@ -54,13 +55,17 @@ class Worker(object):
         self.slavecon = None
         self._work = []
         self._commited = False
+        self._timestamp = None
 
     def consume(self):
         self.infile.flush()
         line = self.infile.readline()
-        if self.regexer.match('connect', line):
-            self.slavecon, self.inspector, self.populator = self.connect_callback()
+        if self.regexer.match('lastup', line):
+            self._timestamp = self.regexer.m.groupdict()['timestamp']
+        elif self.regexer.match('connect', line):
+            self.slavecon, self.inspector, self.populator = self.connect_callback(self._timestamp)
             self.inspector.resume()
+            self._timestamp = None
         elif self.regexer.match('paused', line):
             if self.inspector:
                 self.inspector.resume()
@@ -69,12 +74,14 @@ class Worker(object):
             if self.regexer.match('commit', work):
                 if self.inspector:
                     self._commited = True
+                    self._timestamp = self.regexer.m.groupdict()['timestamp']
             elif self._commited:
-                self.populator.update()
+                self.populator.update(self._timestamp)
                 for work in self._work:
                     self.work(work)
                 self._work = []
                 self._commited = False
+                self._timestamp = None
             self._work.append(work)
 
     def work(self, work):
@@ -114,7 +121,7 @@ def connect():
     histcon = psycopg2.connect(**HISTORY)
     return slavecon, histcon
 
-def connect_callback():
+def connect_callback(timestamp):
     slavecon, histcon = connect()
 
     inspector_logger = get_logger('inspector')
@@ -123,7 +130,7 @@ def connect_callback():
     inspector = SlaveInspector(slavecon, logger=inspector_logger)
     populator = HistoryPopulator(histcon, logger=populator_logger)
     populator.create_tables()
-    populator.update()
+    populator.update(timestamp)
     for schema in inspector.schemas():
         populator.add_schema(schema)
         for table in inspector.tables(schema):

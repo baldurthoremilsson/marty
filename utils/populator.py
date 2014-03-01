@@ -22,7 +22,8 @@ class HistoryPopulator(object):
         cur.execute("""
         CREATE TABLE IF NOT EXISTS marty_updates(
             id SERIAL PRIMARY KEY,
-            time TIMESTAMP DEFAULT current_timestamp NOT NULL
+            time TIMESTAMP DEFAULT current_timestamp NOT NULL,
+            mastertime TIMESTAMP NOT NULL
         )
         """)
 
@@ -64,11 +65,11 @@ class HistoryPopulator(object):
         cur.close()
         self.con.commit()
 
-    def update(self):
+    def update(self, mastertime):
         cur = self.con.cursor()
         cur.execute("""
-        INSERT INTO marty_updates DEFAULT VALUES RETURNING id
-        """)
+        INSERT INTO marty_updates(mastertime) VALUES(%s) RETURNING id
+        """, (mastertime,))
         self._update_id = cur.fetchone()[0]
         cur.close()
         self.con.commit()
