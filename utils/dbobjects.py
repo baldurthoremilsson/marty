@@ -2,7 +2,8 @@
 
 class Schema(object):
 
-    def __init__(self, oid, name):
+    def __init__(self, ctid, oid, name):
+        self.ctid = ctid
         self.oid = oid
         self.name = name
 
@@ -12,8 +13,9 @@ class Schema(object):
 
 class Table(object):
 
-    def __init__(self, schema, oid, name, con=None, internal_name=None):
+    def __init__(self, schema, ctid, oid, name, con=None, internal_name=None):
         self.schema = schema
+        self.ctid = ctid
         self.oid = oid
         self.name = name
         self.columns = []
@@ -42,8 +44,8 @@ class Table(object):
         yield StartColumn()
         yield StopColumn()
 
-    def add_column(self, name, number, type, length, internal_name=None):
-        self.columns.append(Column(self, name, number, type, length, internal_name=internal_name))
+    def add_column(self, ctid, name, number, type, length, internal_name=None):
+        self.columns.append(Column(self, ctid, name, number, type, length, internal_name=internal_name))
 
     def data(self):
         cur = self.con.cursor()
@@ -51,11 +53,13 @@ class Table(object):
         for row in cur:
             yield row
         cur.close()
+        self.con.commit()
 
 
 class Column(object):
 
-    def __init__(self, table, name, number, type, length, internal_name=None):
+    def __init__(self, table, ctid, name, number, type, length, internal_name=None):
+        self.ctid = ctid
         self.table = table
         self.name = name
         self.number = number

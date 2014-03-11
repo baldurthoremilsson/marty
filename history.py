@@ -6,6 +6,7 @@ import sys
 import re
 
 from utils import SlaveInspector, HistoryPopulator, get_logger
+from utils.dbobjects import Schema
 
 SLAVE = {
     'host': 'localhost',
@@ -30,18 +31,31 @@ class RegExer(object):
 
         self.regexes = {
             'insert': re.compile(r'Heap - insert(?:\(init\))?: {}'.format(rel_tid)),
-            'update': re.compile(r'Heap - (?:hot_)?update: {} xmax \d+ ; new tid (?P<new_block>\d+)/(?P<new_offset>\d+) xmax \d+'.format(rel_tid)),
+            'update': re.compile(r'Heap - (?:hot_)?update: {} xmax \d+ (?:[A-Z_]+ )?; new tid (?P<new_block>\d+)/(?P<new_offset>\d+) xmax \d+'.format(rel_tid)),
             'delete': re.compile(r'Heap - delete: {}'.format(rel_tid)),
             'lastup': re.compile(r'LOG:  database system was interrupted; last known up at (?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})'),
             'connect': re.compile(r'LOG:  database system is ready to accept read only connections'),
             'paused': re.compile(r'LOG:  recovery has paused'),
-            'redo': re.compile(r'LOG:  REDO @ [0-9A-F]+/[0-9A-F]+; LSN [0-9A-F]+/[0-9A-F]+: prev [0-9A-F]+/[0-9A-F]+; xid [0-9]+; len [0-9]+: (.*)'),
+            'redo': re.compile(r'LOG:  REDO @ [0-9A-F]+/[0-9A-F]+; LSN [0-9A-F]+/[0-9A-F]+: prev [0-9A-F]+/[0-9A-F]+; xid [0-9]+; len [0-9]+(?:; bkpb[0-9]+)?: (.*)'),
             'commit': re.compile(r'Transaction - commit: (?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)'),
         }
 
     def match(self, regex, pattern):
         self.m = self.regexes[regex].match(pattern)
         return self.m
+
+    @property
+    def groupdict(self):
+        return self.m.groupdict()
+
+    def __getitem__(self, key):
+        return self.groupdict[key]
+
+    def get(self, key, val):
+        try:
+            return self[key]
+        except KeyError:
+            return val
 
 
 
@@ -77,43 +91,111 @@ class Worker(object):
                     self._timestamp = self.regexer.m.groupdict()['timestamp']
             elif self._commited:
                 self.populator.update(self._timestamp)
-                for work in self._work:
-                    self.work(work)
+                for w in self._work:
+                    self.work(w)
                 self._work = []
                 self._commited = False
                 self._timestamp = None
             self._work.append(work)
 
     def work(self, work):
-        if self.regexer.match('insert', work):
-            self.insert(**self.regexer.m.groupdict())
-        elif self.regexer.match('update', work):
-            self.update(**self.regexer.m.groupdict())
-        elif self.regexer.match('delete', work):
-            self.delete(**self.regexer.m.groupdict())
-
-    def insert(self, spc_node, db_node, rel_node, block, offset):
-        if int(db_node) != self.inspector.db_oid:
+        for action in 'insert', 'update', 'delete':
+            if self.regexer.match(action, work):
+                break
+        else:
+            # If the work is not an insert, update or delete action we leave
+            # (we only run the else part if the for loop does not break)
             return
-        table = self.inspector.tabledict.get(int(rel_node), None)
+
+        db_node = int(self.regexer.get('db_node', 0))
+        rel_node = int(self.regexer.get('rel_node', 0))
+        block = int(self.regexer.get('block', 0))
+        offset = int(self.regexer.get('offset', 0))
+        new_block = int(self.regexer.get('new_block', 0))
+        new_offset = int(self.regexer.get('new_offset', 0))
+
+        if db_node != self.inspector.db_oid:
+            return
+
+        if rel_node in self.inspector.system_tables:
+            table = self.inspector.system_tables[rel_node]
+            if table.name == 'pg_namespace':
+                self.schema_change(action, block, offset, new_block, new_offset)
+            elif table.name == 'pg_class':
+                self.table_change(action, block, offset, new_block, new_offset)
+            elif table.name == 'pg_attribute':
+                self.column_change(action, block, offset, new_block, new_offset)
+            return
+
+        table = self.inspector.tabledict.get(rel_node, None)
         if not table:
             return
+
+        if action == 'insert':
+            self.insert(table, block, offset)
+        elif action == 'update':
+            self.update(table, block, offset, new_block, new_offset)
+        elif action == 'delete':
+            self.delete(table, block, offset)
+
+    def ctid(self, block, offset):
+        return '({},{})'.format(block, offset)
+
+    def schema_change(self, action, block, offset, new_block, new_offset):
+        if action == 'insert':
+            schema = self.inspector.get_schema(self.ctid(block, offset))
+            self.populator.add_schema(schema)
+        elif action == 'update':
+            schema = self.inspector.get_schema(self.ctid(new_block, new_offset))
+            self.populator.add_schema(schema)
+            self.populator.remove_schema(self.ctid(block, offset))
+        elif action == 'delete':
+            self.populator.remove_schema(self.ctid(block, offset))
+
+    def table_change(self, action, block, offset, new_block, new_offset):
+        if action == 'insert':
+            table = self.inspector.get_table(self.ctid(block, offset))
+            if table:
+                self.populator.add_table(table)
+                self.populator.create_table(table)
+        elif action == 'update':
+            table = self.inspector.get_table(self.ctid(new_block, new_offset))
+            if table:
+                self.populator.add_table(table)
+            self.populator.remove_table(self.ctid(block, offset))
+        elif action == 'delete':
+            table = self.populator.get_table(self.ctid(block, offset))
+            if table:
+                self.populator.delete_all(table)
+            self.populator.remove_table(self.ctid(block, offset))
+
+    def column_change(self, action, block, offset, new_block, new_offset):
+        update = self.populator.update_id
+        if action == 'insert':
+            column = self.inspector.get_column(self.ctid(block, offset), update=update)
+            if column:
+                self.populator.add_column(column)
+                self.populator.add_data_column(column)
+        if action == 'update':
+            old_column = self.populator.get_column(self.ctid(block, offset))
+            column = self.inspector.get_column(self.ctid(new_block, new_offset),
+                    update=update, internal_name=old_column.internal_name)
+            if column:
+                self.populator.add_column(column)
+            self.populator.remove_column(self.ctid(block, offset))
+        if action == 'delete':
+            self.populator.remove_column(self.ctid(block, offset))
+
+    def insert(self, table, block, offset):
         row = self.inspector.get(table, block, offset)
         self.populator.insert(table, block, offset, row)
-        print 'insert', row
 
-    def update(self, spc_node, db_node, rel_node, block, offset, new_block, new_offset):
-        self.delete(spc_node, db_node, rel_node, block, offset)
-        self.insert(spc_node, db_node, rel_node, new_block, new_offset)
+    def update(self, table, block, offset, new_block, new_offset):
+        self.delete(table, block, offset)
+        self.insert(table, new_block, new_offset)
 
-    def delete(self, spc_node, db_node, rel_node, block, offset):
-        if int(db_node) != self.inspector.db_oid:
-            return
-        table = self.inspector.tabledict.get(int(rel_node), None)
-        if not table:
-            return
+    def delete(self, table, block, offset):
         self.populator.delete(table, block, offset)
-        print 'delete', table.name
 
 
 def connect():

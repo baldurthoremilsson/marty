@@ -2,12 +2,14 @@
 
 import logging
 
+from dbobjects import Table, Column
+
 
 class HistoryPopulator(object):
 
     def __init__(self, con, logger=None):
         self.con = con
-        self._update_id = None
+        self.update_id = None
         if logger:
             self.logger = logger
         else:
@@ -30,6 +32,7 @@ class HistoryPopulator(object):
         # marty_schemas
         cur.execute("""
         CREATE TABLE IF NOT EXISTS marty_schemas(
+            _ctid tid NOT NULL,
             oid oid NOT NULL,
             name name NOT NULL,
             start integer REFERENCES marty_updates(id) NOT NULL,
@@ -40,6 +43,7 @@ class HistoryPopulator(object):
         # marty_tables
         cur.execute("""
         CREATE TABLE IF NOT EXISTS marty_tables(
+            _ctid tid NOT NULL,
             oid oid NOT NULL,
             name name NOT NULL,
             schema oid NOT NULL,
@@ -52,6 +56,7 @@ class HistoryPopulator(object):
         # marty_columns
         cur.execute("""
         CREATE TABLE IF NOT EXISTS marty_columns(
+            _ctid tid NOT NULL,
             table_oid oid NOT NULL,
             name name NOT NULL,
             number int2 NOT NULL,
@@ -70,33 +75,41 @@ class HistoryPopulator(object):
         cur.execute("""
         INSERT INTO marty_updates(mastertime) VALUES(%s) RETURNING id
         """, (mastertime,))
-        self._update_id = cur.fetchone()[0]
+        self.update_id = cur.fetchone()[0]
         cur.close()
         self.con.commit()
-        self.logger.debug('new update id {}'.format(self._update_id))
+        self.logger.debug('new update id {}'.format(self.update_id))
 
     def add_schema(self, schema):
         self.logger.info('adding schema {}'.format(schema.name))
 
         cur = self.con.cursor()
         cur.execute("""
-        INSERT INTO marty_schemas(oid, name, start) VALUES(%s, %s, %s)
-        """, (schema.oid, schema.name, self._update_id))
+        INSERT INTO marty_schemas(_ctid, oid, name, start) VALUES(%s, %s, %s, %s)
+        """, (schema.ctid, schema.oid, schema.name, self.update_id))
         cur.close()
         self.con.commit()
 
-        self.logger.debug(cur.query)
+    def remove_schema(self, ctid):
+        self.logger.info('removing schema {}'.format(ctid))
+
+        cur = self.con.cursor()
+        cur.execute("""
+        UPDATE marty_schemas SET stop = %s WHERE _ctid = %s
+        """, (self.update_id, ctid))
+        cur.close()
+        self.con.commit()
 
     def add_table(self, table):
         self.logger.info('adding table {}'.format(table.long_name))
 
-        update = self._update_id
+        update = self.update_id
         table.update = update
         cur = self.con.cursor()
         cur.execute("""
-        INSERT INTO marty_tables(oid, name, schema, internal_name, start)
-        VALUES(%s, %s, %s, %s, %s)
-        """, (table.oid, table.name, table.schema.oid, table.internal_name, self._update_id))
+        INSERT INTO marty_tables(_ctid, oid, name, schema, internal_name, start)
+        VALUES(%s, %s, %s, %s, %s, %s)
+        """, (table.ctid, table.oid, table.name, table.schema.oid, table.internal_name, self.update_id))
         cur.close()
         self.con.commit()
 
@@ -105,18 +118,39 @@ class HistoryPopulator(object):
         for column in table.columns:
             self.add_column(column)
 
+    def remove_table(self, ctid):
+        self.logger.info('removing table {}'.format(ctid))
+
+        cur = self.con.cursor()
+        cur.execute("""
+        UPDATE marty_tables SET stop = %s WHERE _ctid = %s
+        """, (self.update_id, ctid))
+        cur.close()
+        self.con.commit()
+
     def add_column(self, column):
         self.logger.info('adding column {} to {}'.format(column.name, column.table.long_name))
 
         cur = self.con.cursor()
         cur.execute("""
-        INSERT INTO marty_columns(table_oid, name, number, type, length, internal_name, start)
-        VALUES(%s, %s, %s, %s, %s, %s, %s)
-        """, (column.table.oid, column.name, column.number, column.type, column.length, column.internal_name, self._update_id))
+        INSERT INTO marty_columns(_ctid, table_oid, name, number, type, length, internal_name, start)
+        VALUES(%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (column.ctid, column.table.oid, column.name, column.number, column.type,
+            column.length, column.internal_name, self.update_id))
         cur.close()
         self.con.commit()
 
         self.logger.debug(cur.query)
+
+    def remove_column(self, ctid):
+        self.logger.info('removing column {}'.format(ctid))
+
+        cur = self.con.cursor()
+        cur.execute("""
+        UPDATE marty_columns SET stop = %s WHERE _ctid = %s
+        """, (self.update_id, ctid))
+        cur.close()
+        self.con.commit()
 
     def create_table(self, table):
         self.logger.info('creating table {}'.format(table.internal_name))
@@ -127,12 +161,33 @@ class HistoryPopulator(object):
 
         self.logger.debug(cur.query)
 
+        cur.execute('SELECT oid FROM pg_class WHERE relname = %s', (table.internal_name,))
+        table_oid, = cur.fetchone()
+
         for column in table.columns:
             cur.execute("""
             UPDATE pg_attribute
             SET atttypmod = %s
             WHERE attrelid = %s AND attname = %s
-            """, (column.length, column.table.oid, column.name))
+            """, (column.length, table_oid, column.internal_name))
+        cur.close()
+        self.con.commit()
+
+    def add_data_column(self, column):
+        cur = self.con.cursor()
+        cur.execute("""
+        ALTER TABLE {} ADD COLUMN {} {}
+        """.format(column.table.internal_name, column.internal_name, column.type))
+
+        cur.execute('SELECT oid FROM pg_class WHERE relname = %s', (column.table.internal_name,))
+        table_oid, = cur.fetchone()
+
+        cur.execute("""
+        UPDATE pg_attribute
+        SET atttypmod = %s
+        WHERE attrelid = %s AND attname = %s
+        """, (column.length, table_oid, column.internal_name))
+
         cur.close()
         self.con.commit()
 
@@ -147,7 +202,7 @@ class HistoryPopulator(object):
         cur = self.con.cursor()
         for line in table.data():
             values = list(line)
-            values.extend([self._update_id, None])
+            values.extend([self.update_id, None])
             cur.execute(query, values)
 
             self.logger.debug(cur.query)
@@ -162,7 +217,7 @@ class HistoryPopulator(object):
         value_list = ', '.join('%s' for column in table.internal_columns)
         query = 'INSERT INTO {}({}) VALUES({})'.format(table_name, column_names, value_list)
 
-        values = ['({},{})'.format(block, offset)] + list(row) + [self._update_id, None]
+        values = ['({},{})'.format(block, offset)] + list(row) + [self.update_id, None]
         cur = self.con.cursor()
         cur.execute(query, values)
         self.logger.debug(cur.query)
@@ -172,12 +227,46 @@ class HistoryPopulator(object):
     def delete(self, table, block, offset):
         self.logger.info('deleting from table {}'.format(table.internal_name))
         query = 'UPDATE {} SET stop = %s WHERE data_ctid = %s'.format(table.internal_name)
-        values = [self._update_id, '({},{})'.format(block, offset)]
+        values = [self.update_id, '({},{})'.format(block, offset)]
         cur = self.con.cursor()
         cur.execute(query, values)
         self.logger.debug(cur.query)
         cur.close()
         self.con.commit()
+
+    def delete_all(self, table):
+        query = 'UPDATE {} SET stop = %s WHERE stop IS NULL'.format(table.internal_name)
+        values = (self.update_id,)
+        cur = self.con.cursor()
+        cur.execute(query, values)
+        cur.close()
+        self.con.commit()
+
+    def get_table(self, ctid):
+        cur = self.con.cursor()
+        cur.execute("""
+        SELECT _ctid, oid, name, internal_name
+        FROM marty_tables
+        WHERE _ctid = %s""", (ctid,))
+        row = cur.fetchone()
+        if not row:
+            return
+        ctid, oid, name, internal_name = row
+        cur.close()
+        return Table(None, ctid, oid, name, internal_name=internal_name)
+
+    def get_column(self, ctid):
+        cur = self.con.cursor()
+        cur.execute("""
+        SELECT _ctid, table_oid, name, number, type, length, internal_name
+        FROM marty_columns
+        WHERE _ctid = %s""", (ctid,))
+        row = cur.fetchone()
+        if not row:
+            return
+        ctid, table_oid, name, number, type, length, internal_name = row
+        cur.close()
+        return Column(None, ctid, name, number, type, length, internal_name=internal_name)
 
 
 class ClonePopulator(object):
