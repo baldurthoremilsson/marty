@@ -48,12 +48,10 @@ class Table(object):
         self.columns.append(Column(self, ctid, name, number, type, length, internal_name=internal_name))
 
     def data(self):
-        cur = self.con.cursor()
-        cur.execute('SELECT ctid, * FROM {}'.format(self.long_name))
-        for row in cur:
-            yield row
-        cur.close()
-        self.con.commit()
+        with self.con.cursor() as curs:
+            curs.execute('SELECT ctid, * FROM {}'.format(self.long_name))
+            for row in curs:
+                yield row
 
 
 class Column(object):
