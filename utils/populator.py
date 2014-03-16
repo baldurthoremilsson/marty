@@ -294,8 +294,9 @@ class ClonePopulator(object):
     def _dblink_connstr(self):
         parts = {
             'host': 'host={}',
-            'user': 'user={}',
             'port': 'port={}',
+            'user': 'user={}',
+            'password': 'password={}',
             'database': 'dbname={}',
         }
         return ' '.join(parts[key].format(value) for key, value in self.history_coninfo.iteritems())

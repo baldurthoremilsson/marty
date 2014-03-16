@@ -3,24 +3,11 @@
 
 import psycopg2
 import sys
+import argparse
 import re
 
 from utils import SlaveInspector, HistoryPopulator, get_logger
 from utils.dbobjects import Schema
-
-SLAVE = {
-    'host': 'localhost',
-    'port': 5435,
-    'user': 'baldur',
-    'database': 'baldur',
-}
-
-HISTORY = {
-    'host': 'localhost',
-    'port': 5436,
-    'user': 'baldur',
-    'database': 'history',
-}
 
 
 class RegExer(object):
@@ -198,19 +185,55 @@ class Worker(object):
         self.populator.delete(table, block, offset)
 
 
-def connect():
-    slavecon = psycopg2.connect(**SLAVE)
-    histcon = psycopg2.connect(**HISTORY)
+def connect(slave, history):
+    slavecon = psycopg2.connect(**slave)
+    histcon = psycopg2.connect(**history)
+    slavecon.autocommit = True
+    histcon.autocommit = True
     return slavecon, histcon
 
 def connect_callback(timestamp):
-    slavecon, histcon = connect()
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--slave-host', help='Hostname or IP of the slave database')
+    parser.add_argument('--slave-port', help='Port number for the slave database')
+    parser.add_argument('--slave-user', help='Username for the slave database')
+    parser.add_argument('--slave-password', help='Password for the slave database')
+    parser.add_argument('--slave-database', help='Name of the slave database')
+
+    parser.add_argument('--history-host', help='Hostname or IP of the history database')
+    parser.add_argument('--history-port', help='Port number for the history database')
+    parser.add_argument('--history-user', help='Username for the history database')
+    parser.add_argument('--history-password', help='Password for the history database')
+    parser.add_argument('--history-database', help='Name of the history database')
+
+    args = parser.parse_args()
+
+    slave = {
+        'host': args.slave_host,
+        'port': args.slave_port,
+        'user': args.slave_user,
+        'password': args.slave_password,
+        'database': args.slave_database
+    }
+
+    history = {
+        'host': args.history_host,
+        'port': args.history_port,
+        'user': args.history_user,
+        'password': args.history_password,
+        'database': args.history_database
+    }
+
+
+    slavecon, histcon = connect(slave, history)
 
     inspector_logger = get_logger('inspector')
     populator_logger = get_logger('populator')
 
     inspector = SlaveInspector(slavecon, logger=inspector_logger)
     populator = HistoryPopulator(histcon, logger=populator_logger)
+
     populator.create_tables()
     populator.update(timestamp)
     for schema in inspector.schemas():
@@ -224,8 +247,11 @@ def connect_callback(timestamp):
     return slavecon, inspector, populator
 
 
-if __name__ == "__main__":
+def main():
     worker = Worker(sys.stdin, RegExer(), connect_callback)
     while True:
         worker.consume()
 
+
+if __name__ == "__main__":
+    main()
