@@ -1,0 +1,39 @@
+diff --git a/src/backend/access/transam/xlog.c b/src/backend/access/transam/xlog.c
+index 93ee070..20d6806 100644
+--- a/src/backend/access/transam/xlog.c
++++ b/src/backend/access/transam/xlog.c
+@@ -4666,7 +4666,7 @@ recoveryPausesHere(void)
+ 
+ 	while (RecoveryIsPaused())
+ 	{
+-		pg_usleep(1000000L);	/* 1000 ms */
++		pg_usleep(10000L);	/* 10 ms */
+ 		HandleStartupProcInterrupts();
+ 	}
+ }
+@@ -4867,6 +4867,7 @@ StartupXLOG(void)
+ 	XLogReaderState *xlogreader;
+ 	XLogPageReadPrivate private;
+ 	bool		fast_promoted = false;
++	bool		first_run = true;
+ 
+ 	/*
+ 	 * Read control file and check XLOG status looks valid.
+@@ -5696,6 +5697,17 @@ StartupXLOG(void)
+ 				if (!recoveryContinue)
+ 					break;
+ 
++				/*
++				 * Pause the recovery after a transaction commit and also
++				 * at the start of the recovery
++				 */
++				if (first_run || record->xl_rmid == RM_XACT_ID) {
++						//&& (record->xl_info & ~XLR_INFO_MASK == XLOG_XACT_COMMIT_COMPACT ||
++						//	record->xl_info & ~XLR_INFO_MASK == XLOG_XACT_COMMIT)) {
++					SetRecoveryPause(true);
++					first_run = false;
++				}
++
+ 				/* Else, try to fetch the next WAL record */
+ 				record = ReadRecord(xlogreader, InvalidXLogRecPtr, LOG, false);
+ 			} while (record != NULL);
